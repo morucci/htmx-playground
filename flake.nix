@@ -1,22 +1,19 @@
 {
-  description = "mono-hackage";
-  nixConfig.bash-prompt = "[nix(mono-hackage)] ";
+  description = "htmx-playground";
+  nixConfig.bash-prompt = "[nix(htmx-playground)] ";
 
   inputs = {
-    nixpkgs.url =
-      "github:NixOS/nixpkgs/ed014c27f4d0ca772fb57d3b8985b772b0503bbd";
+    hspkgs.url =
+      "github:podenv/hspkgs/70ebfaa3e643ce20fe8ff97c17693ceb4bfaa30d";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, hspkgs, flake-utils }:
     flake-utils.lib.eachSystem [ "x86_64-linux" ] (system:
       let
-        pkgs = import nixpkgs {
-          inherit system;
-          # config.allowBroken = true;
-        };
-        packageName = "mono-hackage";
-        haskellPackages = pkgs.haskellPackages;
+        packageName = "htmx-playground";
+        pkgs = hspkgs.pkgs;
+        haskellPackages = pkgs.hspkgs;
         myPackage = haskellPackages.callCabal2nix packageName self { };
 
       in {
@@ -26,11 +23,11 @@
         devShell = haskellPackages.shellFor {
           packages = p: [ myPackage ];
 
-          buildInputs = with haskellPackages; [
-            ghcid
-            ormolu
-            cabal-install
-            hlint
+          buildInputs = [
+            pkgs.ghcid
+            pkgs.ormolu
+            pkgs.cabal-install
+            pkgs.hlint
             pkgs.haskell-language-server
           ];
         };

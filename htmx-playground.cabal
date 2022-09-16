@@ -1,17 +1,15 @@
 cabal-version:      2.4
-name:               mono-hackage
+name:               htmx-playground
 version:            0.1.0.0
-homepage:           https://github.com/change-metrics/mono-hackage#README.md
-bug-reports:        https://github.com/change-metrics/mono-hackage/issues
-synopsis:           Mono Hackage
-description:        Build a Monocle tenant config from Hackage
+homepage:           https://github.com/morucci/htmx-playground#README.md
+bug-reports:        https://github.com/morucci/htmx-playground/issues
+synopsis:           HTMX Playground
+description:        HTMX PLayground
 license-file:       LICENSE
 author:             Fabien Boucher
 maintainer:         fabien.dot.boucher@gmail.com
 copyright:          2022 Fabien Boucher
-category:           Game
 extra-source-files:
-    CHANGELOG.md
     README.md
 
 common common-options
@@ -30,14 +28,21 @@ common common-options
 library
     import:           common-options
     exposed-modules:  Cli
-    build-depends:    servant-client
+    build-depends:    servant
+                    , servant-lucid
+                    , servant-server
+                    , servant-websocket
+                    , servant-xstatic
+                    , lucid
+                    , lucid-xstastic
+                    , text
     hs-source-dirs:   src
 
-executable mono-hackage
+executable htmx-playground
     import:           common-options
     main-is:          Main.hs
 
-    build-depends:    mono-hackage
+    build-depends:    htmx-playground
 
     hs-source-dirs:   app
     default-language: Haskell2010
