@@ -1,7 +1,7 @@
 cradle:
   cabal:
     - path: "src"
-      component: "lib:mono-hackage"
+      component: "lib:htmx-playground"
 
     - path: "app/Main.hs"
-      component: "mono-hackage:exe:mono-hackage"
+      component: "htmx-playground:exe:htmx-playground"

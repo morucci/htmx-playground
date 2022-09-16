@@ -31,11 +31,16 @@ library
     build-depends:    servant
                     , servant-lucid
                     , servant-server
-                    , servant-websocket
+                    , servant-websockets
                     , servant-xstatic
                     , lucid
-                    , lucid-xstastic
+                    , lucid-xstatic
                     , text
+                    , wai
+                    , warp
+                    , websockets
+                    , xstatic
+                    , xstatic-htmx
     hs-source-dirs:   src
 
 executable htmx-playground

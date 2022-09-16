@@ -1,6 +1,6 @@
 module Main where
 
-import Cli 
+import Cli
 import Prelude
 
 main :: IO ()
