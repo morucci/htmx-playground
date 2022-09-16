@@ -36,11 +36,13 @@ library
                     , lucid
                     , lucid-xstatic
                     , text
+                    , http-api-data
                     , wai
                     , warp
                     , websockets
                     , xstatic
                     , xstatic-htmx
+                    , xstatic-tailwind
     hs-source-dirs:   src
 
 executable htmx-playground
