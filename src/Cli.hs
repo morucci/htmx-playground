@@ -7,6 +7,7 @@
 module Cli (main) where
 
 import Control.Monad (when)
+import Control.Monad.IO.Class (liftIO)
 import Data.String.Interpolate (i)
 import Data.Text
 import GHC.Generics (Generic)
@@ -15,6 +16,7 @@ import Lucid.Base (makeAttribute)
 import Lucid.XStatic (xstaticScripts)
 import qualified Network.Wai as Wai
 import Network.Wai.Handler.Warp as Warp
+import Network.WebSockets (receive, withPingThread)
 import qualified Network.WebSockets as WS
 import Servant
 import Servant.API.WebSocket
@@ -26,13 +28,14 @@ import qualified XStatic.Tailwind as XStatic
 import qualified XStatic.Tailwind as Xstatic
 import Prelude
 
-hxGet, hxPost, hxTrigger, hxTarget, hxSwap, hxVals :: Text -> Attribute
+hxGet, hxPost, hxTrigger, hxTarget, hxSwap, hxVals, hxWS :: Text -> Attribute
 hxGet = makeAttribute "hx-get"
 hxPost = makeAttribute "hx-post"
 hxTrigger = makeAttribute "hx-trigger"
 hxTarget = makeAttribute "hx-target"
 hxSwap = makeAttribute "hx-swap"
 hxVals = makeAttribute "hx-vals"
+hxWS = makeAttribute "hx-ws"
 
 data MessageForm = MessageForm
   { message :: Text
@@ -59,9 +62,6 @@ demoServer =
     :<|> messagesBisHandler
     :<|> messagesPostHandler
     :<|> searchUsersHandler
-
-wsHandler :: WS.Connection -> Handler ()
-wsHandler _c = pure ()
 
 instance FromForm MessageForm
 
@@ -114,6 +114,18 @@ indexHtml = do
             ]
         span_ [id_ "ph2"] "placeholder"
 
+      div_ [class_ "pb-2"] $ do
+        p_ "Chat room via websocket"
+        div_ [hxWS "connect:/ws"] $ do
+          div_ [id_ "chatroom", class_ "border-2"] "chat room placeholder"
+          form_ [hxWS "send:submit"] $ do
+            input_
+              [ id_ "chatmessageId",
+                name_ "chatmessage",
+                type_ "text",
+                placeholder_ "Type a chat message"
+              ]
+
 messagesHandler :: Html ()
 messagesHandler = do
   span_ "Here is a message from the /messages endpoint"
@@ -135,6 +147,13 @@ searchUsersHandler (MessageForm search) = pure $ do
   where
     render :: Text -> Html ()
     render item = p_ $ toHtml item
+
+wsHandler :: WS.Connection -> Handler ()
+wsHandler conn = do
+  liftIO $ withPingThread conn 5 (pure ()) $ do
+    wsD <- liftIO $ receive conn
+    liftIO $ putStrLn $ show wsD
+    pure ()
 
 demoApp :: Wai.Application
 demoApp = serve (Proxy @APIv1) $ demoServer
