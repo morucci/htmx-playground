@@ -6,6 +6,7 @@
 
 module Cli (main) where
 
+import Control.Monad (when)
 import Data.String.Interpolate (i)
 import Data.Text
 import GHC.Generics (Generic)
@@ -38,6 +39,8 @@ data MessageForm = MessageForm
   }
   deriving (Generic)
 
+type SearchForm = MessageForm
+
 type APIv1 =
   Get '[HTML] (Html ())
     :<|> "xstatic" :> Raw
@@ -45,6 +48,7 @@ type APIv1 =
     :<|> "messages" :> Get '[HTML] (Html ())
     :<|> "messagesBis" :> Header "HX-Target" Text :> Get '[HTML] (Html ())
     :<|> "messagesPost" :> ReqBody '[FormUrlEncoded] MessageForm :> Post '[HTML] (Html ())
+    :<|> "searchUsers" :> ReqBody '[FormUrlEncoded] SearchForm :> Post '[HTML] (Html ())
 
 demoServer :: Server APIv1
 demoServer =
@@ -54,6 +58,7 @@ demoServer =
     :<|> pure messagesHandler
     :<|> messagesBisHandler
     :<|> messagesPostHandler
+    :<|> searchUsersHandler
 
 wsHandler :: WS.Connection -> Handler ()
 wsHandler _c = pure ()
@@ -96,6 +101,19 @@ indexHtml = do
           input_ [id_ "messageForm", name_ "message", type_ "text"]
           button_ [type_ "submit", class_ "border-2 bg-blue-500 text-white"] "Submit"
 
+      div_ [class_ "pb-2"] $ do
+        form_ [] $ do
+          input_
+            [ id_ "searchForm",
+              name_ "message",
+              placeholder_ "Start to type",
+              type_ "search",
+              hxPost "/searchUsers",
+              hxTarget "#ph2",
+              hxTrigger "keyup[target.value.length > 1] changed delay:500ms, search"
+            ]
+        span_ [id_ "ph2"] "placeholder"
+
 messagesHandler :: Html ()
 messagesHandler = do
   span_ "Here is a message from the /messages endpoint"
@@ -107,6 +125,16 @@ messagesBisHandler hM = pure $ do
 messagesPostHandler :: MessageForm -> Handler (Html ())
 messagesPostHandler (MessageForm m) = pure $ do
   p_ $ toHtml m
+
+searchUsersHandler :: SearchForm -> Handler (Html ())
+searchUsersHandler (MessageForm search) = pure $ do
+  let users = ["John Doe", "Jane Doe", "Sarah Connor", "Walter White"]
+      found = Prelude.filter (isInfixOf search) users
+  when (Prelude.null found) $ p_ "No result"
+  mapM_ render found
+  where
+    render :: Text -> Html ()
+    render item = p_ $ toHtml item
 
 demoApp :: Wai.Application
 demoApp = serve (Proxy @APIv1) $ demoServer
