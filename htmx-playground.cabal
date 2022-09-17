@@ -35,6 +35,7 @@ library
                     , servant-xstatic
                     , lucid
                     , lucid-xstatic
+                    , string-interpolate
                     , text
                     , http-api-data
                     , wai

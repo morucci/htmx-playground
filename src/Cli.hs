@@ -1,9 +1,12 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
 module Cli (main) where
 
+import Data.String.Interpolate (i)
 import Data.Text
 import GHC.Generics (Generic)
 import Lucid
@@ -22,12 +25,13 @@ import qualified XStatic.Tailwind as XStatic
 import qualified XStatic.Tailwind as Xstatic
 import Prelude
 
-hxGet, hxPost, hxTrigger, hxTarget, hxSwap :: Text -> Attribute
+hxGet, hxPost, hxTrigger, hxTarget, hxSwap, hxVals :: Text -> Attribute
 hxGet = makeAttribute "hx-get"
 hxPost = makeAttribute "hx-post"
 hxTrigger = makeAttribute "hx-trigger"
 hxTarget = makeAttribute "hx-target"
 hxSwap = makeAttribute "hx-swap"
+hxVals = makeAttribute "hx-vals"
 
 data MessageForm = MessageForm
   { message :: Text
@@ -39,6 +43,7 @@ type APIv1 =
     :<|> "xstatic" :> Raw
     :<|> "ws" :> WebSocket
     :<|> "messages" :> Get '[HTML] (Html ())
+    :<|> "messagesBis" :> Header "HX-Target" Text :> Get '[HTML] (Html ())
     :<|> "messagesPost" :> ReqBody '[FormUrlEncoded] MessageForm :> Post '[HTML] (Html ())
 
 demoServer :: Server APIv1
@@ -47,6 +52,7 @@ demoServer =
     :<|> xstaticServant [XStatic.htmx, Xstatic.tailwind]
     :<|> wsHandler
     :<|> pure messagesHandler
+    :<|> messagesBisHandler
     :<|> messagesPostHandler
 
 wsHandler :: WS.Connection -> Handler ()
@@ -74,8 +80,16 @@ indexHtml = do
         span_ [id_ "ph1"] "placeholder"
 
       div_ [class_ "pb-2"] $ do
-        span_ [class_ "border-2 pr-2", hxGet "/messages", hxTrigger "click", hxSwap "afterend"] $ do
-          "Click here to display the GET result after the content"
+        span_
+          [ id_ "messageSender", -- is sent in HX-trigger request headers
+            hxVals "'{\"foo\": \"bar\"}'", -- should be sent as request parameters
+            class_ "border-2 pr-2",
+            hxGet "/messagesBis",
+            hxTrigger "click",
+            hxSwap "afterend"
+          ]
+          $ do
+            "Click here to display the GET result after the content"
 
       div_ [class_ "pb-2"] $ do
         form_ [hxPost "/messagesPost", hxSwap "afterend"] $ do
@@ -85,6 +99,10 @@ indexHtml = do
 messagesHandler :: Html ()
 messagesHandler = do
   span_ "Here is a message from the /messages endpoint"
+
+messagesBisHandler :: Maybe Text -> Handler (Html ())
+messagesBisHandler hM = pure $ do
+  span_ . toHtml @Text $ [i|"Message from /messageBis (header HX-Trigger sent: #{show hM})"|]
 
 messagesPostHandler :: MessageForm -> Handler (Html ())
 messagesPostHandler (MessageForm m) = pure $ do
