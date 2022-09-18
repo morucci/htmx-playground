@@ -40,6 +40,8 @@ library
                     , lens
                     , lens-aeson
                     , text
+                    , time
+                    , stm
                     , http-api-data
                     , wai
                     , warp

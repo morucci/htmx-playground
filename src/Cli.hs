@@ -6,6 +6,7 @@
 
 module Cli (main) where
 
+import Control.Concurrent.STM (STM, TBQueue, TVar, atomically, modifyTVar, newTBQueue, newTVar, readTVar)
 import Control.Lens ((^?))
 import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
@@ -13,6 +14,7 @@ import Data.Aeson (Value (String))
 import Data.Aeson.Lens (key)
 import Data.String.Interpolate (i, iii)
 import Data.Text
+import Data.Time (UTCTime)
 import GHC.Generics (Generic)
 import Lucid
 import Lucid.Base (makeAttribute)
@@ -59,12 +61,13 @@ type APIv1 =
     :<|> "messagesBis" :> Header "HX-Target" Text :> Get '[HTML] (Html ())
     :<|> "messagesPost" :> ReqBody '[FormUrlEncoded] MessageForm :> Post '[HTML] (Html ())
     :<|> "searchUsers" :> ReqBody '[FormUrlEncoded] SearchForm :> Post '[HTML] (Html ())
+    :<|> SCHatAPIv1
 
 xStaticFiles :: [XStatic.XStaticFile]
 xStaticFiles = [XStatic.htmx, XStatic.tailwind, XStatic.hyperscript]
 
-demoServer :: Server APIv1
-demoServer =
+demoServer :: SChatState -> Server APIv1
+demoServer sChatState =
   pure indexHtml
     :<|> xstaticServant xStaticFiles
     :<|> wsHandler
@@ -72,6 +75,7 @@ demoServer =
     :<|> messagesBisHandler
     :<|> messagesPostHandler
     :<|> searchUsersHandler
+    :<|> sChatServer sChatState
 
 instance FromForm MessageForm
 
@@ -198,11 +202,137 @@ wsHandler conn = do
             _ -> Nothing
         _other -> Nothing
 
-demoApp :: Wai.Application
-demoApp = serve (Proxy @APIv1) $ demoServer
+-- WSChat Begin
+
+type SCHatAPIv1 = "schat" :> "ws" :> WebSocket :<|> "schat" :> Get '[HTML] (Html ())
+
+sChatServer :: SChatState -> Server SCHatAPIv1
+sChatServer sChatState = wsChatHandler sChatState :<|> pure sChatHTMLHandler
+
+data Message = Message
+  { date :: UTCTime,
+    content :: Text
+  }
+
+data Client = Client
+  { name :: Text,
+    rQueue :: TBQueue Message,
+    sQueue :: TBQueue Message
+  }
+
+type SChatState = TVar [Client]
+
+newSChatState :: STM SChatState
+newSChatState = newTVar []
+
+addClient :: Text -> SChatState -> STM ()
+addClient name state = do
+  rq <- newTBQueue 10
+  rs <- newTBQueue 10
+  modifyTVar state $ \clients -> do
+    clients <> [Client name rq rs]
+
+isClientExists :: Text -> SChatState -> STM Bool
+isClientExists name' state = do
+  clients <- readTVar state
+  pure $ Prelude.any (\Client {name} -> name == name') clients
+
+wsChatHandler :: SChatState -> WS.Connection -> Handler ()
+wsChatHandler state conn = do
+  liftIO $ withPingThread conn 5 (pure ()) $ do
+    clientAdded <- handleNewConnection
+    case clientAdded of
+      Just name -> handleConnection name
+      Nothing -> do
+        putStrLn "Client already exists - closing"
+        pure () -- losely close the connection
+  where
+    handleConnection name = handle
+      where
+        handle = do
+          WS.sendTextData conn $ renderInputChat
+          wsD <- liftIO $ receiveDataMessage conn
+          case extractMessage wsD of
+            Just msg -> do
+              liftIO . putStrLn $ "Received: " <> show msg
+              WS.sendTextData conn $ renderBS $ do
+                div_ [id_ "chatroom-content", hxSwapOOB "beforeend"] $ do
+                  div_ $ toHtml $ name <> ": " <> msg
+              handle
+            Nothing -> handle
+
+    handleNewConnection = do
+      name <- waitForName
+      putStrLn $ "Receiving connection: " <> show name
+      atomically $ do
+        exists <- isClientExists name state
+        if not exists
+          then do
+            addClient name state
+            pure $ Just name
+          else do
+            pure Nothing
+      where
+        waitForName = do
+          wsD <- liftIO $ receiveDataMessage conn
+          case extractLoginName wsD of
+            Just name -> pure name
+            Nothing -> waitForName
+        extractLoginName dataM =
+          case dataM of
+            WS.Text bs _ -> do
+              case bs ^? key "chatNameMessage" of
+                Just (String m) -> Just m
+                _ -> Nothing
+            _other -> Nothing
+
+    renderInputChat = do
+      renderBS $ do
+        form_ [hxWS "send:submit", name_ "chatInput", id_ "Input"] $ do
+          input_
+            [ type_ "text",
+              name_ "chatInputMessage",
+              placeholder_ "Type a message"
+            ]
+
+    extractMessage :: WS.DataMessage -> Maybe Text
+    extractMessage dataMessage =
+      case dataMessage of
+        WS.Text bs _ -> do
+          case bs ^? key "chatInputMessage" of
+            Just (String m) -> Just m
+            _ -> Nothing
+        _other -> Nothing
+
+sChatHTMLHandler :: Html ()
+sChatHTMLHandler = do
+  doctypehtml_ $ do
+    head_ $ do
+      title_ "Simple WebSocket Chat "
+      xstaticScripts xStaticFiles
+      script_ [iii||]
+    body_ $ do
+      div_ [class_ "pb-2"] $ do
+        p_ "Simple WebSocket Chat"
+        div_ [hxWS "connect:/schat/ws", hS "on htmx:oobAfterSwap call #chatInput.reset()"] $ do
+          div_ [id_ "chatroom", class_ "border-2"] $ do
+            div_ [id_ "chatroom-content"] "chat room placeholder"
+          form_ [hxWS "send:submit", name_ "chatName", id_ "Input"] $ do
+            input_
+              [ type_ "text",
+                name_ "chatNameMessage",
+                placeholder_ "Type your name"
+              ]
+
+-- WSChat End
+
+demoApp :: SChatState -> Wai.Application
+demoApp sChatState = serve (Proxy @APIv1) $ demoServer sChatState
 
 runServer :: IO ()
-runServer = Warp.run 8091 demoApp
+runServer = do
+  sChatState <- atomically newSChatState
+  Warp.run 8091 $ demoApp sChatState
 
 main :: IO ()
 main = runServer
