@@ -36,6 +36,8 @@ library
                     , lucid
                     , lucid-xstatic
                     , string-interpolate
+                    , aeson
+                    , lens
                     , lens-aeson
                     , text
                     , http-api-data
