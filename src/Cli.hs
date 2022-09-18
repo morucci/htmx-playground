@@ -11,7 +11,7 @@ import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value (String))
 import Data.Aeson.Lens (key)
-import Data.String.Interpolate (i)
+import Data.String.Interpolate (i, iii)
 import Data.Text
 import GHC.Generics (Generic)
 import Lucid
@@ -26,13 +26,14 @@ import Servant.API.WebSocket (WebSocket)
 import Servant.HTML.Lucid
 import Servant.XStatic
 import Web.FormUrlEncoded (FromForm)
+import qualified XStatic
 import qualified XStatic.Htmx as XStatic
+import qualified XStatic.Hyperscript as XStatic
 import qualified XStatic.Tailwind as XStatic
-import qualified XStatic.Tailwind as Xstatic
 import Prelude
 
 -- Use https://hackage.haskell.org/package/lucid-htmx
-hxGet, hxPost, hxTrigger, hxTarget, hxSwap, hxVals, hxWS, hxSwapOOB :: Text -> Attribute
+hxGet, hxPost, hxTrigger, hxTarget, hxSwap, hxVals, hxWS, hxSwapOOB, hS :: Text -> Attribute
 hxGet = makeAttribute "hx-get"
 hxPost = makeAttribute "hx-post"
 hxTrigger = makeAttribute "hx-trigger"
@@ -41,6 +42,7 @@ hxSwap = makeAttribute "hx-swap"
 hxVals = makeAttribute "hx-vals"
 hxWS = makeAttribute "hx-ws"
 hxSwapOOB = makeAttribute "hx-swap-oob"
+hS = makeAttribute "_"
 
 data MessageForm = MessageForm
   { message :: Text
@@ -58,10 +60,13 @@ type APIv1 =
     :<|> "messagesPost" :> ReqBody '[FormUrlEncoded] MessageForm :> Post '[HTML] (Html ())
     :<|> "searchUsers" :> ReqBody '[FormUrlEncoded] SearchForm :> Post '[HTML] (Html ())
 
+xStaticFiles :: [XStatic.XStaticFile]
+xStaticFiles = [XStatic.htmx, XStatic.tailwind, XStatic.hyperscript]
+
 demoServer :: Server APIv1
 demoServer =
   pure indexHtml
-    :<|> xstaticServant [XStatic.htmx, Xstatic.tailwind]
+    :<|> xstaticServant xStaticFiles
     :<|> wsHandler
     :<|> pure messagesHandler
     :<|> messagesBisHandler
@@ -75,7 +80,17 @@ indexHtml = do
   doctypehtml_ $ do
     head_ $ do
       title_ "HTMX playground page"
-      xstaticScripts [XStatic.htmx, XStatic.tailwind]
+      xstaticScripts xStaticFiles
+      -- https://htmx.org/docs/#events
+      script_
+        [iii|
+        console.log('Hello HTMX');
+        htmx.logger = function(elt, event, data) {
+          if(console) {
+            console.log(event, elt, data);
+          }
+        }
+      |]
     body_ $ do
       div_ [class_ "pb-2"] $ do
         h1_ [class_ "text-lg"] "Welcome in htmx demo"
@@ -104,7 +119,11 @@ indexHtml = do
       div_ [class_ "pb-2"] $ do
         form_ [hxPost "/messagesPost", hxSwap "afterend"] $ do
           input_ [id_ "messageForm", name_ "message", type_ "text"]
-          button_ [type_ "submit", class_ "border-2 bg-blue-500 text-white"] "Submit"
+          button_
+            [ type_ "submit",
+              class_ "border-2 bg-blue-500 text-white"
+            ]
+            "Submit"
 
       div_ [class_ "pb-2"] $ do
         p_ "Active search"
@@ -122,13 +141,11 @@ indexHtml = do
 
       div_ [class_ "pb-2"] $ do
         p_ "Chat room via websocket"
-        div_ [hxWS "connect:/ws"] $ do
+        div_ [hxWS "connect:/ws", hS "on htmx:oobAfterSwap call #chatInput.reset()"] $ do
           div_ [id_ "chatroom", class_ "border-2"] $ do
             div_ [id_ "chatroom-content"] "chat room placeholder"
           -- name and id attribute are sent in the payload as HX-Trigger-name and HX-Trigger
-          form_ [hxWS "send:submit", name_ "chatInputName", id_ "chatInputId"] $ do
-            -- Seems that the input could be reset via
-            -- https://stackoverflow.com/questions/70200167/clear-all-input-fields-on-submit-using-hyperscript
+          form_ [hxWS "send:submit", name_ "chatInputName", id_ "chatInput"] $ do
             input_
               [ type_ "text",
                 name_ "chatInputMessage",
@@ -184,7 +201,7 @@ demoApp :: Wai.Application
 demoApp = serve (Proxy @APIv1) $ demoServer
 
 runServer :: IO ()
-runServer = Warp.run 8090 demoApp
+runServer = Warp.run 8091 demoApp
 
 main :: IO ()
 main = runServer

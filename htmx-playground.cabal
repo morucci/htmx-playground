@@ -45,6 +45,7 @@ library
                     , warp
                     , websockets
                     , xstatic
+                    , xstatic-hyperscript
                     , xstatic-htmx
                     , xstatic-tailwind
     hs-source-dirs:   src
