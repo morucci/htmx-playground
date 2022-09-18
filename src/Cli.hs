@@ -117,6 +117,7 @@ indexHtml = do
             "Click here to display the GET result after the content"
 
       div_ [class_ "pb-2"] $ do
+        p_ "Echo room via post"
         form_ [hxPost "/messagesPost", hxSwap "afterend"] $ do
           input_ [id_ "messageForm", name_ "message", type_ "text"]
           button_
@@ -140,16 +141,16 @@ indexHtml = do
         span_ [id_ "ph2"] "Results placeholder"
 
       div_ [class_ "pb-2"] $ do
-        p_ "Chat room via websocket"
-        div_ [hxWS "connect:/ws", hS "on htmx:oobAfterSwap call #chatInput.reset()"] $ do
-          div_ [id_ "chatroom", class_ "border-2"] $ do
-            div_ [id_ "chatroom-content"] "chat room placeholder"
+        p_ "Echo room via websocket"
+        div_ [hxWS "connect:/ws", hS "on htmx:oobAfterSwap call #echoInput.reset()"] $ do
+          div_ [id_ "echoroom", class_ "border-2"] $ do
+            div_ [id_ "echoroom-content"] "chat room placeholder"
           -- name and id attribute are sent in the payload as HX-Trigger-name and HX-Trigger
-          form_ [hxWS "send:submit", name_ "chatInputName", id_ "chatInput"] $ do
+          form_ [hxWS "send:submit", name_ "echoInputName", id_ "echoInput"] $ do
             input_
               [ type_ "text",
-                name_ "chatInputMessage",
-                placeholder_ "Type a chat message"
+                name_ "echoInputMessage",
+                placeholder_ "Type a message"
               ]
 
 messagesHandler :: Html ()
@@ -184,7 +185,7 @@ wsHandler conn = do
         Just msg -> do
           liftIO . putStrLn $ "Received: " <> show msg
           WS.sendTextData conn $ renderBS $ do
-            div_ [id_ "chatroom-content", hxSwapOOB "beforeend"] $ do
+            div_ [id_ "echoroom-content", hxSwapOOB "beforeend"] $ do
               div_ $ toHtml msg
           handleConnection
         Nothing -> handleConnection
@@ -192,7 +193,7 @@ wsHandler conn = do
     extractMessage dataMessage =
       case dataMessage of
         WS.Text bs _ -> do
-          case bs ^? key "chatInputMessage" of
+          case bs ^? key "echoInputMessage" of
             Just (String m) -> Just m
             _ -> Nothing
         _other -> Nothing
