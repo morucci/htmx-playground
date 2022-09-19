@@ -6,9 +6,21 @@
 
 module Cli (main) where
 
-import Control.Concurrent.STM (STM, TBQueue, TVar, atomically, lengthTBQueue, modifyTVar, newTBQueue, newTVar, readTVar, readTVarIO, writeTBQueue)
+import Control.Concurrent.Async (concurrently_)
+import Control.Concurrent.STM
+  ( STM,
+    TBQueue,
+    TVar,
+    atomically,
+    modifyTVar,
+    newTBQueue,
+    newTVar,
+    readTBQueue,
+    readTVar,
+    writeTBQueue,
+  )
 import Control.Lens ((^?))
-import Control.Monad (when)
+import Control.Monad (forever, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value (String))
 import Data.Aeson.Lens (key)
@@ -214,42 +226,44 @@ data Message = Message
     login :: Text,
     content :: Text
   }
+  deriving (Show)
 
 data Client = Client
   { name :: Text,
-    sQueue :: TBQueue Message
+    conn :: WS.Connection
   }
 
-data SChatState = SChatState
-  { clients :: [Client],
+data SChatS = SChatS
+  { clients :: TVar [Client],
     queue :: TBQueue Message
   }
-
-type SChatS = TVar SChatState
 
 newSChatS :: STM SChatS
 newSChatS = do
   rq <- newTBQueue 10
-  newTVar $ SChatState [] rq
+  clients <- newTVar []
+  pure $ SChatS clients rq
 
-addClient :: Text -> SChatS -> STM ()
-addClient name state = do
-  rs <- newTBQueue 10
-  modifyTVar state $ \SChatState {..} -> do
-    let newClients = clients <> [Client name rs]
-    SChatState newClients queue
+addClient :: Text -> WS.Connection -> SChatS -> STM ()
+addClient name conn state = do
+  modifyTVar (clients state) $ \cls -> do
+    cls <> [Client name conn]
 
 isClientExists :: Text -> SChatS -> STM Bool
 isClientExists name' state = do
-  s <- readTVar state
-  pure $ Prelude.any (\Client {name} -> name == name') $ clients s
+  cls <- readTVar $ clients state
+  pure $ Prelude.any (\Client {name} -> name == name') cls
 
 wsChatHandler :: SChatS -> WS.Connection -> Handler ()
 wsChatHandler state conn = do
   liftIO $ withPingThread conn 5 (pure ()) $ do
-    clientAdded <- handleNewConnection
-    case clientAdded of
-      Just name -> handleConnection name
+    nameM <- handleNewConnection
+    case nameM of
+      Just name -> do
+        -- Replace the input box
+        WS.sendTextData conn $ renderInputChat name
+        -- Start handling the ack client
+        handleConnection name
       Nothing -> do
         putStrLn "Client already exists - closing"
         pure () -- losely close the connection
@@ -257,23 +271,14 @@ wsChatHandler state conn = do
     handleConnection name = handle
       where
         handle = do
-          size <- atomically $ do
-            s <- readTVar state
-            l <- lengthTBQueue $ queue s
-            pure l
-          putStrLn $ show size
-          WS.sendTextData conn $ renderInputChat name
+          -- Wait for an input message
           wsD <- liftIO $ receiveDataMessage conn
           now <- getCurrentTime
           case extractMessage wsD of
             Just msg -> do
               putStrLn $ "Received: " <> show msg
-              WS.sendTextData conn $ renderBS $ do
-                div_ [id_ "chatroom-content", hxSwapOOB "beforeend"] $ do
-                  div_ $ toHtml $ name <> ": " <> msg
               atomically $ do
-                s <- readTVar state
-                writeTBQueue (queue s) $ Message now name msg
+                writeTBQueue (queue state) $ Message now name msg
               handle
             Nothing -> handle
 
@@ -282,11 +287,11 @@ wsChatHandler state conn = do
       putStrLn $ "Receiving connection: " <> show name
       atomically $ do
         exists <- isClientExists name state
-        if not exists
-          then do
-            addClient name state
+        case exists of
+          False -> do
+            addClient name conn state
             pure $ Just name
-          else do
+          True ->
             pure Nothing
       where
         waitForName = do
@@ -342,6 +347,23 @@ sChatHTMLHandler = do
                 placeholder_ "Type your name"
               ]
 
+dispatcher :: SChatS -> IO ()
+dispatcher SChatS {..} = forever $ do
+  (m, c) <- atomically $ do
+    msg <- readTBQueue queue
+    cls <- readTVar clients
+    pure (msg, cls)
+  mapM_ (sendToClient m) c
+  where
+    sendToClient msg Client {..} = do
+      WS.sendTextData conn $ renderBS $ do
+        div_ [id_ "chatroom-content", hxSwapOOB "beforeend"] $ do
+          div_ $ messageToHtml msg
+      where
+        messageToHtml Message {..} =
+          toHtml $
+            (show date) <> show login <> show content
+
 -- WSChat End
 
 demoApp :: SChatS -> Wai.Application
@@ -350,7 +372,9 @@ demoApp sChatS = serve (Proxy @APIv1) $ demoServer sChatS
 runServer :: IO ()
 runServer = do
   sChatS <- atomically newSChatS
-  Warp.run 8091 $ demoApp sChatS
+  concurrently_
+    (Warp.run 8091 $ demoApp sChatS)
+    (dispatcher sChatS)
 
 main :: IO ()
 main = runServer

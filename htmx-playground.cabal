@@ -37,6 +37,7 @@ library
                     , lucid-xstatic
                     , string-interpolate
                     , aeson
+                    , async
                     , lens
                     , lens-aeson
                     , text
