@@ -6,7 +6,7 @@
 
 module Cli (main) where
 
-import Control.Concurrent.STM (STM, TBQueue, TVar, atomically, modifyTVar, newTBQueue, newTVar, readTVar)
+import Control.Concurrent.STM (STM, TBQueue, TVar, atomically, lengthTBQueue, modifyTVar, newTBQueue, newTVar, readTVar, readTVarIO, writeTBQueue)
 import Control.Lens ((^?))
 import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
@@ -14,7 +14,7 @@ import Data.Aeson (Value (String))
 import Data.Aeson.Lens (key)
 import Data.String.Interpolate (i, iii)
 import Data.Text
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, getCurrentTime)
 import GHC.Generics (Generic)
 import Lucid
 import Lucid.Base (makeAttribute)
@@ -66,8 +66,8 @@ type APIv1 =
 xStaticFiles :: [XStatic.XStaticFile]
 xStaticFiles = [XStatic.htmx, XStatic.tailwind, XStatic.hyperscript]
 
-demoServer :: SChatState -> Server APIv1
-demoServer sChatState =
+demoServer :: SChatS -> Server APIv1
+demoServer sChatS =
   pure indexHtml
     :<|> xstaticServant xStaticFiles
     :<|> wsHandler
@@ -75,7 +75,7 @@ demoServer sChatState =
     :<|> messagesBisHandler
     :<|> messagesPostHandler
     :<|> searchUsersHandler
-    :<|> sChatServer sChatState
+    :<|> sChatServer sChatS
 
 instance FromForm MessageForm
 
@@ -206,38 +206,45 @@ wsHandler conn = do
 
 type SCHatAPIv1 = "schat" :> "ws" :> WebSocket :<|> "schat" :> Get '[HTML] (Html ())
 
-sChatServer :: SChatState -> Server SCHatAPIv1
-sChatServer sChatState = wsChatHandler sChatState :<|> pure sChatHTMLHandler
+sChatServer :: SChatS -> Server SCHatAPIv1
+sChatServer sChatS = wsChatHandler sChatS :<|> pure sChatHTMLHandler
 
 data Message = Message
   { date :: UTCTime,
+    login :: Text,
     content :: Text
   }
 
 data Client = Client
   { name :: Text,
-    rQueue :: TBQueue Message,
     sQueue :: TBQueue Message
   }
 
-type SChatState = TVar [Client]
+data SChatState = SChatState
+  { clients :: [Client],
+    queue :: TBQueue Message
+  }
 
-newSChatState :: STM SChatState
-newSChatState = newTVar []
+type SChatS = TVar SChatState
 
-addClient :: Text -> SChatState -> STM ()
-addClient name state = do
+newSChatS :: STM SChatS
+newSChatS = do
   rq <- newTBQueue 10
+  newTVar $ SChatState [] rq
+
+addClient :: Text -> SChatS -> STM ()
+addClient name state = do
   rs <- newTBQueue 10
-  modifyTVar state $ \clients -> do
-    clients <> [Client name rq rs]
+  modifyTVar state $ \SChatState {..} -> do
+    let newClients = clients <> [Client name rs]
+    SChatState newClients queue
 
-isClientExists :: Text -> SChatState -> STM Bool
+isClientExists :: Text -> SChatS -> STM Bool
 isClientExists name' state = do
-  clients <- readTVar state
-  pure $ Prelude.any (\Client {name} -> name == name') clients
+  s <- readTVar state
+  pure $ Prelude.any (\Client {name} -> name == name') $ clients s
 
-wsChatHandler :: SChatState -> WS.Connection -> Handler ()
+wsChatHandler :: SChatS -> WS.Connection -> Handler ()
 wsChatHandler state conn = do
   liftIO $ withPingThread conn 5 (pure ()) $ do
     clientAdded <- handleNewConnection
@@ -250,14 +257,23 @@ wsChatHandler state conn = do
     handleConnection name = handle
       where
         handle = do
-          WS.sendTextData conn $ renderInputChat
+          size <- atomically $ do
+            s <- readTVar state
+            l <- lengthTBQueue $ queue s
+            pure l
+          putStrLn $ show size
+          WS.sendTextData conn $ renderInputChat name
           wsD <- liftIO $ receiveDataMessage conn
+          now <- getCurrentTime
           case extractMessage wsD of
             Just msg -> do
-              liftIO . putStrLn $ "Received: " <> show msg
+              putStrLn $ "Received: " <> show msg
               WS.sendTextData conn $ renderBS $ do
                 div_ [id_ "chatroom-content", hxSwapOOB "beforeend"] $ do
                   div_ $ toHtml $ name <> ": " <> msg
+              atomically $ do
+                s <- readTVar state
+                writeTBQueue (queue s) $ Message now name msg
               handle
             Nothing -> handle
 
@@ -286,14 +302,16 @@ wsChatHandler state conn = do
                 _ -> Nothing
             _other -> Nothing
 
-    renderInputChat = do
+    renderInputChat name = do
       renderBS $ do
         form_ [hxWS "send:submit", name_ "chatInput", id_ "Input"] $ do
-          input_
-            [ type_ "text",
-              name_ "chatInputMessage",
-              placeholder_ "Type a message"
-            ]
+          span_ $ do
+            span_ [class_ "pr-2"] $ toHtml name
+            input_
+              [ type_ "text",
+                name_ "chatInputMessage",
+                placeholder_ "Type a message"
+              ]
 
     extractMessage :: WS.DataMessage -> Maybe Text
     extractMessage dataMessage =
@@ -326,13 +344,13 @@ sChatHTMLHandler = do
 
 -- WSChat End
 
-demoApp :: SChatState -> Wai.Application
-demoApp sChatState = serve (Proxy @APIv1) $ demoServer sChatState
+demoApp :: SChatS -> Wai.Application
+demoApp sChatS = serve (Proxy @APIv1) $ demoServer sChatS
 
 runServer :: IO ()
 runServer = do
-  sChatState <- atomically newSChatState
-  Warp.run 8091 $ demoApp sChatState
+  sChatS <- atomically newSChatS
+  Warp.run 8091 $ demoApp sChatS
 
 main :: IO ()
 main = runServer
