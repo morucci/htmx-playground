@@ -28,6 +28,7 @@ common common-options
 library
     import:           common-options
     exposed-modules:  Cli
+                    , Chat
     build-depends:    servant
                     , servant-lucid
                     , servant-server
