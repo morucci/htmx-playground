@@ -5,12 +5,13 @@
 module Chat where
 
 import Control.Concurrent.STM
+import Control.Exception.Safe (tryAny)
 import Control.Lens ((^?))
-import Control.Monad (forever)
+import Control.Monad (forever, void)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value (String))
 import Data.Aeson.Lens (key)
-import Data.String.Interpolate (iii)
+import Data.String.Interpolate (i, iii)
 import Data.Text (Text)
 import Data.Time (UTCTime, getCurrentTime)
 import Lucid (Attribute, Html, ToHtml (toHtml), renderBS)
@@ -68,6 +69,11 @@ addClient name conn state = do
   modifyTVar (clients state) $ \cls -> do
     cls <> [Client name conn]
 
+removeClient :: Text -> SChatS -> STM ()
+removeClient name' state = do
+  modifyTVar (clients state) $ \cls -> do
+    filter (\Client {name} -> not $ name' == name) cls
+
 isClientExists :: Text -> SChatS -> STM Bool
 isClientExists name' state = do
   cls <- readTVar $ clients state
@@ -76,30 +82,40 @@ isClientExists name' state = do
 wsChatHandler :: SChatS -> WS.Connection -> Handler ()
 wsChatHandler state conn = do
   liftIO $ WS.withPingThread conn 5 (pure ()) $ do
-    nameM <- handleNewConnection
-    case nameM of
-      Just name -> do
+    ncE <- tryAny $ handleNewConnection
+    case ncE of
+      Right (Just name) -> do
         -- Replace the input box
         WS.sendTextData conn $ renderInputChat name
         -- Start handling the ack client
         handleConnection name
-      Nothing -> do
+      Right Nothing -> do
         putStrLn "Client already exists - closing"
-        pure () -- losely close the connection
+        closeConnection
+      Left e -> do
+        putStrLn [i|Terminating connection due to #{show e}|]
+        closeConnection
   where
     handleConnection name = handle
       where
         handle = do
-          -- Wait for an input message
-          wsD <- liftIO $ WS.receiveDataMessage conn
-          now <- getCurrentTime
-          case extractMessage wsD of
-            Just msg -> do
-              putStrLn $ "Received: " <> show msg
-              atomically $ do
-                writeTBQueue (queue state) $ Message now name msg
-              handle
-            Nothing -> handle
+          hE <- tryAny handle'
+          case hE of
+            Right _ -> pure ()
+            Left e -> do
+              putStrLn [i|Terminating connection for #{name} due to #{show e}|]
+              atomically $ removeClient name state
+              closeConnection
+        handle' = do
+          wsD <- WS.receiveDataMessage conn
+          case extractMessage wsD "chatInputMessage" of
+            Just txt -> do
+              now <- getCurrentTime
+              let message = Message now name txt
+              putStrLn [i|Received: #{show message}|]
+              atomically $ writeTBQueue (queue state) message
+              handle'
+            Nothing -> handle'
 
     handleNewConnection = do
       name <- waitForName
@@ -114,17 +130,14 @@ wsChatHandler state conn = do
             pure Nothing
       where
         waitForName = do
-          wsD <- liftIO $ WS.receiveDataMessage conn
-          case extractLoginName wsD of
+          wsD <- WS.receiveDataMessage conn
+          case extractMessage wsD "chatNameMessage" of
             Just name -> pure name
             Nothing -> waitForName
-        extractLoginName dataM =
-          case dataM of
-            WS.Text bs _ -> do
-              case bs ^? key "chatNameMessage" of
-                Just (String m) -> Just m
-                _ -> Nothing
-            _other -> Nothing
+
+    closeConnection = do
+      WS.sendClose conn ("Bye" :: Text)
+      void $ WS.receiveDataMessage conn
 
     renderInputChat name = do
       renderBS $ do
@@ -137,11 +150,11 @@ wsChatHandler state conn = do
                 placeholder_ "Type a message"
               ]
 
-    extractMessage :: WS.DataMessage -> Maybe Text
-    extractMessage dataMessage =
+    extractMessage :: WS.DataMessage -> Text -> Maybe Text
+    extractMessage dataMessage keyName =
       case dataMessage of
         WS.Text bs _ -> do
-          case bs ^? key "chatInputMessage" of
+          case bs ^? key keyName of
             Just (String m) -> Just m
             _ -> Nothing
         _other -> Nothing
@@ -158,7 +171,7 @@ sChatHTMLHandler = do
         p_ "Simple WebSocket Chat"
         div_ [hxWS "connect:/schat/ws", hS "on htmx:oobAfterSwap call #chatInput.reset()"] $ do
           div_ [id_ "chatroom", class_ "border-2"] $ do
-            div_ [id_ "chatroom-content"] "chat room placeholder"
+            div_ [id_ "chatroom-content"] ""
           form_ [hxWS "send:submit", name_ "chatName", id_ "Input"] $ do
             input_
               [ type_ "text",
@@ -175,12 +188,16 @@ dispatcher SChatS {..} = forever $ do
   mapM_ (sendToClient m) c
   where
     sendToClient msg Client {..} = do
-      WS.sendTextData conn $ renderBS $ do
-        div_ [id_ "chatroom-content", hxSwapOOB "beforeend"] $ do
-          div_ $ messageToHtml msg
+      rE <- tryAny $ sendPayload
+      case rE of
+        Right _ -> pure ()
+        Left e -> do
+          putStrLn [i|"Unable to send a payload to client #{name} due to #{show e}"|]
       where
+        sendPayload = do
+          WS.sendTextData conn $ renderBS $ do
+            div_ [id_ "chatroom-content", hxSwapOOB "beforeend"] $ do
+              div_ $ messageToHtml msg
         messageToHtml Message {..} =
           toHtml $
             (show date) <> show login <> show content
-
--- WSChat End

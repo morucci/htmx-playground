@@ -43,6 +43,7 @@ library
                     , lens-aeson
                     , text
                     , time
+                    , safe-exceptions
                     , stm
                     , http-api-data
                     , wai
