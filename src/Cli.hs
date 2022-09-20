@@ -7,7 +7,6 @@
 module Cli (main) where
 
 import Chat
-import Control.Concurrent.Async (concurrently_)
 import Control.Concurrent.STM (atomically)
 import Control.Lens ((^?))
 import Control.Monad (when)
@@ -209,9 +208,7 @@ demoApp sChatS = serve (Proxy @APIv1) $ demoServer sChatS
 runServer :: IO ()
 runServer = do
   sChatS <- atomically newSChatS
-  concurrently_
-    (Warp.run 8091 $ demoApp sChatS)
-    (dispatcher sChatS)
+  Warp.run 8091 $ demoApp sChatS
 
 main :: IO ()
 main = runServer

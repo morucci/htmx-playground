@@ -4,6 +4,7 @@
 
 module Chat where
 
+import Control.Concurrent.Async (concurrently_)
 import Control.Concurrent.STM
 import Control.Exception.Safe (tryAny)
 import Control.Lens ((^?))
@@ -50,24 +51,26 @@ data Message = Message
 
 data Client = Client
   { name :: Text,
-    conn :: WS.Connection
+    conn :: WS.Connection,
+    inputQ :: TBQueue Message
   }
 
 data SChatS = SChatS
-  { clients :: TVar [Client],
-    queue :: TBQueue Message
+  { clients :: TVar [Client]
   }
 
 newSChatS :: STM SChatS
 newSChatS = do
-  rq <- newTBQueue 10
   clients <- newTVar []
-  pure $ SChatS clients rq
+  pure $ SChatS clients
 
-addClient :: Text -> WS.Connection -> SChatS -> STM ()
+addClient :: Text -> WS.Connection -> SChatS -> STM Client
 addClient name conn state = do
+  q <- newTBQueue 10
+  let newClient = Client name conn q
   modifyTVar (clients state) $ \cls -> do
-    cls <> [Client name conn]
+    cls <> [newClient]
+  pure newClient
 
 removeClient :: Text -> SChatS -> STM ()
 removeClient name' state = do
@@ -84,11 +87,11 @@ wsChatHandler state conn = do
   liftIO $ WS.withPingThread conn 5 (pure ()) $ do
     ncE <- tryAny $ handleNewConnection
     case ncE of
-      Right (Just name) -> do
+      Right (Just client) -> do
         -- Replace the input box
-        WS.sendTextData conn $ renderInputChat name
+        WS.sendTextData conn $ renderInputChat (name client)
         -- Start handling the ack client
-        handleConnection name
+        handleConnection client
       Right Nothing -> do
         putStrLn "Client already exists - closing"
         closeConnection
@@ -96,26 +99,44 @@ wsChatHandler state conn = do
         putStrLn [i|Terminating connection due to #{show e}|]
         closeConnection
   where
-    handleConnection name = handle
+    handleConnection (Client name _c myInputQ) = do
+      concurrently_ handleR handleS
       where
-        handle = do
-          hE <- tryAny handle'
+        handleR = do
+          hE <- tryAny handleR'
           case hE of
             Right _ -> pure ()
             Left e -> do
               putStrLn [i|Terminating connection for #{name} due to #{show e}|]
               atomically $ removeClient name state
               closeConnection
-        handle' = do
-          wsD <- WS.receiveDataMessage conn
-          case extractMessage wsD "chatInputMessage" of
-            Just txt -> do
-              now <- getCurrentTime
-              let message = Message now name txt
-              putStrLn [i|Received: #{show message}|]
-              atomically $ writeTBQueue (queue state) message
-              handle'
-            Nothing -> handle'
+          where
+            handleR' = do
+              wsD <- WS.receiveDataMessage conn
+              case extractMessage wsD "chatInputMessage" of
+                Just txt -> do
+                  now <- getCurrentTime
+                  let message = Message now name txt
+                  putStrLn [i|Received: #{show message}|]
+                  atomically $ do
+                    cls <- readTVar $ clients state
+                    mapM_ (\c -> writeTBQueue (inputQ c) message) cls
+                  -- writeTBQueue (queue state) message
+                  handleR'
+                Nothing -> handleR'
+        handleS = forever handleS'
+          where
+            handleS' = do
+              msg <- atomically $ readTBQueue myInputQ
+              hE <- tryAny $ WS.sendTextData conn $ renderBS $ do
+                div_ [id_ "chatroom-content", hxSwapOOB "beforeend"] $ do
+                  div_ $ messageToHtml msg
+              case hE of
+                Right _ -> pure ()
+                Left e -> putStrLn [i|"Unable to send a payload to client #{name} due to #{show e}"|]
+            messageToHtml Message {..} =
+              toHtml $
+                (show date) <> show login <> show content
 
     handleNewConnection = do
       name <- waitForName
@@ -124,8 +145,8 @@ wsChatHandler state conn = do
         exists <- isClientExists name state
         case exists of
           False -> do
-            addClient name conn state
-            pure $ Just name
+            newClient <- addClient name conn state
+            pure $ Just newClient
           True ->
             pure Nothing
       where
@@ -178,26 +199,3 @@ sChatHTMLHandler = do
                 name_ "chatNameMessage",
                 placeholder_ "Type your name"
               ]
-
-dispatcher :: SChatS -> IO ()
-dispatcher SChatS {..} = forever $ do
-  (m, c) <- atomically $ do
-    msg <- readTBQueue queue
-    cls <- readTVar clients
-    pure (msg, cls)
-  mapM_ (sendToClient m) c
-  where
-    sendToClient msg Client {..} = do
-      rE <- tryAny $ sendPayload
-      case rE of
-        Right _ -> pure ()
-        Left e -> do
-          putStrLn [i|"Unable to send a payload to client #{name} due to #{show e}"|]
-      where
-        sendPayload = do
-          WS.sendTextData conn $ renderBS $ do
-            div_ [id_ "chatroom-content", hxSwapOOB "beforeend"] $ do
-              div_ $ messageToHtml msg
-        messageToHtml Message {..} =
-          toHtml $
-            (show date) <> show login <> show content
