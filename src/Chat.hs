@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TypeOperators #-}
 
@@ -44,13 +45,13 @@ xStaticFiles = [XStatic.htmx, XStatic.tailwind, XStatic.hyperscript]
 
 data Message = Message
   { date :: UTCTime,
-    login :: Text,
+    mLogin :: Text,
     content :: Text
   }
   deriving (Show)
 
 data Client = Client
-  { name :: Text,
+  { cLogin :: Text,
     conn :: WS.Connection,
     inputQ :: TBQueue Message
   }
@@ -73,14 +74,14 @@ addClient name conn state = do
   pure newClient
 
 removeClient :: Text -> SChatS -> STM ()
-removeClient name' state = do
+removeClient cLogin' state = do
   modifyTVar (clients state) $ \cls -> do
-    filter (\Client {name} -> not $ name' == name) cls
+    filter (\Client {cLogin} -> not $ cLogin' == cLogin) cls
 
 isClientExists :: Text -> SChatS -> STM Bool
-isClientExists name' state = do
+isClientExists cLogin' state = do
   cls <- readTVar $ clients state
-  pure $ Prelude.any (\Client {name} -> name == name') cls
+  pure $ Prelude.any (\Client {cLogin} -> cLogin == cLogin') cls
 
 wsChatHandler :: SChatS -> WS.Connection -> Handler ()
 wsChatHandler state conn = do
@@ -89,7 +90,7 @@ wsChatHandler state conn = do
     case ncE of
       Right (Just client) -> do
         -- Replace the input box
-        WS.sendTextData conn $ renderInputChat (name client)
+        WS.sendTextData conn $ renderInputChat client.cLogin
         -- Start handling the ack client
         handleConnection client
       Right Nothing -> do
@@ -99,7 +100,7 @@ wsChatHandler state conn = do
         putStrLn [i|Terminating connection due to #{show e}|]
         closeConnection
   where
-    handleConnection (Client name _conn myInputQ) = do
+    handleConnection (Client login _conn myInputQ) = do
       concurrently_ handleR handleS
       where
         handleR = do
@@ -107,8 +108,8 @@ wsChatHandler state conn = do
           case hE of
             Right _ -> pure ()
             Left e -> do
-              putStrLn [i|Terminating connection for #{name} due to #{show e}|]
-              atomically $ removeClient name state
+              putStrLn [i|Terminating connection for #{login} due to #{show e}|]
+              atomically $ removeClient login state
               closeConnection
           where
             handleR' = do
@@ -116,11 +117,11 @@ wsChatHandler state conn = do
               case extractMessage wsD "chatInputMessage" of
                 Just inputMsg -> do
                   now <- getCurrentTime
-                  let msg = Message now name inputMsg
+                  let msg = Message now login inputMsg
                   atomically $ do
-                    cls <- readTVar $ clients state
+                    cls <- readTVar state.clients
                     forM_ cls $ \c -> do
-                      writeTBQueue (inputQ c) msg
+                      writeTBQueue c.inputQ msg
                 Nothing -> pure ()
         handleS = forever handleS'
           where
@@ -129,40 +130,40 @@ wsChatHandler state conn = do
               hE <- tryAny $ WS.sendTextData conn $ renderBS $ do
                 div_ [id_ "chatroom-content", hxSwapOOB "beforeend"] $ do
                   div_ [id_ "chatroom-message"] $ do
-                    span_ [id_ "chatroom-message-date", class_ "pr-2"] . toHtml $ formatTime defaultTimeLocale "%T" (date msg)
-                    span_ [id_ "chatroom-message-login", class_ "pr-2"] . toHtml $ unpack (login msg)
-                    span_ [id_ "chatroom-message-content"] . toHtml $ unpack (content msg)
+                    span_ [id_ "chatroom-message-date", class_ "pr-2"] . toHtml $ formatTime defaultTimeLocale "%T" (msg.date)
+                    span_ [id_ "chatroom-message-login", class_ "pr-2"] . toHtml $ unpack (msg.mLogin)
+                    span_ [id_ "chatroom-message-content"] . toHtml $ unpack (msg.content)
               case hE of
                 Right _ -> pure ()
-                Left e -> putStrLn [i|"Unable to send a payload to client #{name} due to #{show e}"|]
+                Left e -> putStrLn [i|"Unable to send a payload to client #{login} due to #{show e}"|]
 
     handleNewConnection = do
-      name <- waitForName
-      putStrLn $ "Receiving connection: " <> show name
+      login <- waitForLogin
+      putStrLn $ "Receiving connection: " <> show login
       atomically $ do
-        exists <- isClientExists name state
+        exists <- isClientExists login state
         case exists of
           False -> do
-            newClient <- addClient name conn state
+            newClient <- addClient login conn state
             pure $ Just newClient
           True ->
             pure Nothing
       where
-        waitForName = do
+        waitForLogin = do
           wsD <- WS.receiveDataMessage conn
           case extractMessage wsD "chatNameMessage" of
-            Just name -> pure name
-            Nothing -> waitForName
+            Just login -> pure login
+            Nothing -> waitForLogin
 
     closeConnection = do
       WS.sendClose conn ("Bye" :: Text)
       void $ WS.receiveDataMessage conn
 
-    renderInputChat name = do
+    renderInputChat login = do
       renderBS $ do
         form_ [hxWS "send:submit", name_ "chatInput", id_ "Input"] $ do
           span_ $ do
-            span_ [class_ "pr-2"] $ toHtml name
+            span_ [class_ "pr-2"] $ toHtml login
             input_
               [ type_ "text",
                 name_ "chatInputMessage",
