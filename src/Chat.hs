@@ -8,13 +8,13 @@ import Control.Concurrent.Async (concurrently_)
 import Control.Concurrent.STM
 import Control.Exception.Safe (tryAny)
 import Control.Lens ((^?))
-import Control.Monad (forever, void)
+import Control.Monad (forM_, forever, void)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value (String))
 import Data.Aeson.Lens (key)
 import Data.String.Interpolate (i, iii)
-import Data.Text (Text)
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Text (Text, unpack)
+import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Lucid (Attribute, Html, ToHtml (toHtml), renderBS)
 import Lucid.Base (makeAttribute)
 import Lucid.Html5
@@ -99,11 +99,11 @@ wsChatHandler state conn = do
         putStrLn [i|Terminating connection due to #{show e}|]
         closeConnection
   where
-    handleConnection (Client name _c myInputQ) = do
+    handleConnection (Client name _conn myInputQ) = do
       concurrently_ handleR handleS
       where
         handleR = do
-          hE <- tryAny handleR'
+          hE <- tryAny $ forever handleR'
           case hE of
             Right _ -> pure ()
             Left e -> do
@@ -114,29 +114,27 @@ wsChatHandler state conn = do
             handleR' = do
               wsD <- WS.receiveDataMessage conn
               case extractMessage wsD "chatInputMessage" of
-                Just txt -> do
+                Just inputMsg -> do
                   now <- getCurrentTime
-                  let message = Message now name txt
-                  putStrLn [i|Received: #{show message}|]
+                  let msg = Message now name inputMsg
                   atomically $ do
                     cls <- readTVar $ clients state
-                    mapM_ (\c -> writeTBQueue (inputQ c) message) cls
-                  -- writeTBQueue (queue state) message
-                  handleR'
-                Nothing -> handleR'
+                    forM_ cls $ \c -> do
+                      writeTBQueue (inputQ c) msg
+                Nothing -> pure ()
         handleS = forever handleS'
           where
             handleS' = do
               msg <- atomically $ readTBQueue myInputQ
               hE <- tryAny $ WS.sendTextData conn $ renderBS $ do
                 div_ [id_ "chatroom-content", hxSwapOOB "beforeend"] $ do
-                  div_ $ messageToHtml msg
+                  div_ [id_ "chatroom-message"] $ do
+                    span_ [id_ "chatroom-message-date", class_ "pr-2"] . toHtml $ formatTime defaultTimeLocale "%T" (date msg)
+                    span_ [id_ "chatroom-message-login", class_ "pr-2"] . toHtml $ unpack (login msg)
+                    span_ [id_ "chatroom-message-content"] . toHtml $ unpack (content msg)
               case hE of
                 Right _ -> pure ()
                 Left e -> putStrLn [i|"Unable to send a payload to client #{name} due to #{show e}"|]
-            messageToHtml Message {..} =
-              toHtml $
-                (show date) <> show login <> show content
 
     handleNewConnection = do
       name <- waitForName
@@ -171,7 +169,6 @@ wsChatHandler state conn = do
                 placeholder_ "Type a message"
               ]
 
-    extractMessage :: WS.DataMessage -> Text -> Maybe Text
     extractMessage dataMessage keyName =
       case dataMessage of
         WS.Text bs _ -> do
