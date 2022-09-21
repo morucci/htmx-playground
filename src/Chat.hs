@@ -128,7 +128,7 @@ wsChatHandler state conn = do
             handleS' = do
               msg <- atomically $ readTBQueue myInputQ
               hE <- tryAny $ WS.sendTextData conn $ renderBS $ do
-                div_ [id_ "chatroom-content", hxSwapOOB "beforeend"] $ do
+                div_ [id_ "chatroom-content", hxSwapOOB "afterbegin"] $ do
                   div_ [id_ "chatroom-message"] $ do
                     span_ [id_ "chatroom-message-date", class_ "pr-2"] . toHtml $ formatTime defaultTimeLocale "%T" (msg.date)
                     span_ [id_ "chatroom-message-login", class_ "pr-2"] . toHtml $ unpack (msg.mLogin)
@@ -161,7 +161,7 @@ wsChatHandler state conn = do
 
     renderInputChat login = do
       renderBS $ do
-        form_ [hxWS "send:submit", name_ "chatInput", id_ "Input"] $ do
+        form_ [hxWS "send:submit", id_ "chatroom-input", class_ "bg-purple-200"] $ do
           span_ $ do
             span_ [class_ "pr-2"] $ toHtml login
             input_
@@ -183,17 +183,21 @@ sChatHTMLHandler = do
   doctypehtml_ $ do
     head_ $ do
       title_ "Simple WebSocket Chat "
+      meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1.0"]
       xstaticScripts xStaticFiles
       script_ [iii||]
     body_ $ do
-      div_ [class_ "pb-2"] $ do
-        p_ "Simple WebSocket Chat"
-        div_ [hxWS "connect:/schat/ws", hS "on htmx:oobAfterSwap call #chatInput.reset()"] $ do
-          div_ [id_ "chatroom", class_ "border-2"] $ do
-            div_ [id_ "chatroom-content"] ""
-          form_ [hxWS "send:submit", name_ "chatName", id_ "Input"] $ do
-            input_
-              [ type_ "text",
-                name_ "chatNameMessage",
-                placeholder_ "Type your name"
-              ]
+      div_ [class_ "container mx-auto"] $ do
+        div_ [class_ "bg-purple-100 border-4 border-purple-300 w-full h-64"] $ do
+          p_ [class_ "mb-2 bg-purple-200 text-xl"] "Simple WebSocket Chat"
+          div_ [hxWS "connect:/schat/ws", hS "on htmx:oobAfterSwap call #chatInput.reset()"] $ do
+            div_ [class_ "flex space-x-2 mx-2 my-2"] $ do
+              div_ [id_ "chatroom-chat", class_ "border-2 border-purple-200 w-2/3"] $ do
+                form_ [id_ "chatroom-input", class_ "bg-purple-200", hxWS "send:submit"] $ do
+                  input_
+                    [ type_ "text",
+                      name_ "chatNameMessage",
+                      placeholder_ "Type your name"
+                    ]
+                div_ [id_ "chatroom-content"] ""
+              div_ [id_ "chatroom-members", class_ "border-2 border-purple-200 w-1/3"] ""
