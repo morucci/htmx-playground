@@ -187,17 +187,17 @@ sChatHTMLHandler = do
       xstaticScripts xStaticFiles
       script_ [iii||]
     body_ $ do
-      div_ [class_ "container mx-auto h-64"] $ do
+      div_ [class_ "container mx-auto h-96"] $ do
         div_ [class_ "bg-purple-100 border-4 border-purple-300 w-full h-full"] $ do
-          p_ [class_ "mb-2 bg-purple-200 text-xl"] "Simple WebSocket Chat"
-          div_ [class_ "h-32", hxWS "connect:/schat/ws", hS "on htmx:oobAfterSwap call #chatInput.reset()"] $ do
-            div_ [id_ "chatroom", class_ "flex flex-row space-x-2 mx-2 my-2 h-full"] $ do
-              div_ [id_ "chatroom-chat", class_ "flex-auto w-2/3 h-full"] $ do
-                div_ [id_ "chatroom-content", class_ "overflow-auto border-2 border-purple-200 h-full max-h-full"] ""
-              div_ [id_ "chatroom-members", class_ "border-2 border-purple-200 flex-auto w-1/3 h-full max-h-full"] ""
-            form_ [id_ "chatroom-input", class_ "bg-purple-200", hxWS "send:submit"] $ do
+          p_ [class_ "mb-2 pb-1 bg-purple-300 text-xl"] "Simple WebSocket Chat"
+          div_ [class_ "h-64", hxWS "connect:/schat/ws", hS "on htmx:oobAfterSwap call #chatInput.reset()"] $ do
+            form_ [id_ "chatroom-input", class_ "mx-2 bg-purple-200", hxWS "send:submit"] $ do
               input_
                 [ type_ "text",
                   name_ "chatNameMessage",
                   placeholder_ "Type your name"
                 ]
+            div_ [id_ "chatroom", class_ "flex flex-row space-x-2 mx-2 my-2 h-full"] $ do
+              div_ [id_ "chatroom-chat", class_ "flex-auto w-2/3 h-full"] $ do
+                div_ [id_ "chatroom-content", class_ "overflow-auto border-2 border-purple-200 h-full max-h-full"] ""
+              div_ [id_ "chatroom-members", class_ "border-2 border-purple-200 flex-auto w-1/3 h-full max-h-full"] ""
