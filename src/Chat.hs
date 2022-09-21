@@ -13,6 +13,7 @@ import Control.Monad (forM_, forever, void)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value (String))
 import Data.Aeson.Lens (key)
+import Data.Maybe (isJust)
 import Data.String.Interpolate (i, iii)
 import Data.Text (Text, unpack)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
@@ -116,6 +117,7 @@ wsChatHandler state conn = do
           where
             handleR' = do
               wsD <- WS.receiveDataMessage conn
+              WS.sendTextData conn $ renderInputChat login
               case extractMessage wsD "chatInputMessage" of
                 Just inputMsg -> do
                   now <- getCurrentTime
@@ -139,7 +141,6 @@ wsChatHandler state conn = do
                 Right _ -> pure ()
                 Left e -> putStrLn [i|"Unable to send a payload to client #{login} due to #{show e}"|]
         updateChatMemberOnClients = do
-          putStrLn "Update clients members"
           cls <- atomically $ readTVar state.clients
           forM_ cls $ \c -> do
             hE <- tryAny $ WS.sendTextData c.conn $ renderBS $ do
@@ -163,7 +164,7 @@ wsChatHandler state conn = do
       where
         waitForLogin = do
           wsD <- WS.receiveDataMessage conn
-          case extractMessage wsD "chatNameMessage" of
+          case extractMessage wsD "chatInputName" of
             Just login -> pure login
             Nothing -> waitForLogin
 
@@ -171,16 +172,7 @@ wsChatHandler state conn = do
       WS.sendClose conn ("Bye" :: Text)
       void $ WS.receiveDataMessage conn
 
-    renderInputChat login = do
-      renderBS $ do
-        form_ [hxWS "send:submit", id_ "chatroom-input", class_ "mx-2 bg-purple-200"] $ do
-          span_ $ do
-            span_ [class_ "pl-1 pr-2"] $ toHtml login
-            input_
-              [ type_ "text",
-                name_ "chatInputMessage",
-                placeholder_ "Type a message"
-              ]
+    renderInputChat login = renderBS . chatInput $ Just login
 
     extractMessage dataMessage keyName =
       case dataMessage of
@@ -202,18 +194,11 @@ sChatHTMLHandler = do
       div_ [class_ "container mx-auto h-96"] $ do
         div_ [class_ "bg-purple-100 border-4 border-purple-300 w-full h-full"] $ do
           title
-          div_ [class_ "h-64", hxWS "connect:/schat/ws", hS "on htmx:oobAfterSwap call #chatInput.reset()"] $ do
-            chatInput
+          div_ [class_ "h-64", hxWS "connect:/schat/ws"] $ do
+            chatInput Nothing
             chatDisplay
   where
     title = p_ [class_ "mb-2 pb-1 bg-purple-300 text-xl"] "Simple WebSocket Chat"
-    chatInput = do
-      form_ [id_ "chatroom-input", class_ "mx-2 bg-purple-200", hxWS "send:submit"] $ do
-        input_
-          [ type_ "text",
-            name_ "chatNameMessage",
-            placeholder_ "Type your name"
-          ]
     chatDisplay = do
       div_ [id_ "chatroom", class_ "flex flex-row space-x-2 mx-2 my-2 h-full"] $ do
         roomChat
@@ -224,3 +209,17 @@ sChatHTMLHandler = do
             div_ [id_ "chatroom-content", class_ "overflow-auto border-2 border-purple-200 h-full max-h-full"] ""
         roomMembers = do
           div_ [id_ "chatroom-members", class_ "border-2 border-purple-200 flex-auto w-1/3 h-full max-h-full"] ""
+
+chatInput :: Maybe Text -> Html ()
+chatInput loginM = do
+  let inputFieldName = if isJust loginM then "chatInputMessage" else "chatInputName"
+  form_ [hxWS "send:submit", id_ "chatroom-input", class_ "mx-2 bg-purple-200"] $ do
+    span_ $ do
+      maybe (span_ [] "") (\login -> span_ [class_ "pl-1 pr-2"] $ toHtml login) loginM
+      input_
+        [ type_ "text",
+          name_ inputFieldName,
+          id_ "chatroom-input-field",
+          placeholder_ "Type a message"
+        ]
+    script_ "htmx.find('#chatroom-input-field').focus()"
