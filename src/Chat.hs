@@ -89,7 +89,8 @@ isClientExists cLogin' state = do
 wsChatHandler :: SChatS -> WS.Connection -> Handler ()
 wsChatHandler state conn = do
   liftIO $ WS.withPingThread conn 5 (pure ()) $ do
-    ncE <- tryAny $ handleNewConnection
+    WS.sendTextData conn $ renderBS renderSChat
+    ncE <- tryAny $ handleWaitForLogin
     case ncE of
       Right (Just client) -> do
         -- Replace the input box
@@ -157,7 +158,7 @@ wsChatHandler state conn = do
           forM_ cls $ \c -> do
             writeTBQueue c.inputQ $ EMembersRefresh logins
 
-    handleNewConnection = do
+    handleWaitForLogin = do
       login <- waitForLogin
       putStrLn $ "Receiving connection: " <> show login
       atomically $ do
@@ -189,6 +190,49 @@ wsChatHandler state conn = do
             _ -> Nothing
         _other -> Nothing
 
+    renderSChat :: Html ()
+    renderSChat = do
+      div_ [id_ "schat", class_ "h-96"] $ do
+        div_ [class_ "bg-purple-100 border-4 border-purple-300 w-full h-full"] $ do
+          title
+          chatInput Nothing
+          chatDisplay
+      where
+        title = p_ [class_ "mb-2 pb-1 bg-purple-300 text-xl"] "Simple WebSocket Chat"
+        chatDisplay = do
+          div_ [id_ "chatroom", class_ "flex flex-row space-x-2 mx-2 my-2 h-64"] $ do
+            roomChat
+            roomMembers
+          where
+            roomChat = do
+              div_ [id_ "chatroom-chat", class_ "flex-auto w-3/4 h-full"] $ do
+                div_
+                  [ id_ "chatroom-content",
+                    class_ "overflow-auto border-2 border-purple-200 h-full max-h-full"
+                  ]
+                  ""
+            roomMembers = do
+              div_
+                [ id_ "chatroom-members",
+                  class_ "overflow-auto border-2 border-purple-200 flex-auto w-1/4 h-full max-h-full"
+                ]
+                ""
+
+    chatInput :: Maybe Text -> Html ()
+    chatInput loginM = do
+      let inputFieldName = if isJust loginM then "chatInputMessage" else "chatInputName"
+      form_ [hxWS "send:submit", id_ "chatroom-input", class_ "mx-2 bg-purple-200 rounded-lg"] $ do
+        span_ $ do
+          maybe (span_ [] "") (\login -> span_ [class_ "pl-1 pr-2"] $ toHtml login) loginM
+          input_
+            [ type_ "text",
+              class_ "text-sm rounded-lg bg-purple-50 border border-purple-300 focus:border-purple-400",
+              name_ inputFieldName,
+              id_ "chatroom-input-field",
+              placeholder_ "Type a message"
+            ]
+        script_ "htmx.find('#chatroom-input-field').focus()"
+
 sChatHTMLHandler :: Html ()
 sChatHTMLHandler = do
   doctypehtml_ $ do
@@ -198,44 +242,5 @@ sChatHTMLHandler = do
       xstaticScripts xStaticFiles
       script_ [iii||]
     body_ $ do
-      div_ [class_ "container mx-auto h-96"] $ do
-        div_ [class_ "bg-purple-100 border-4 border-purple-300 w-full h-full"] $ do
-          title
-          div_ [class_ "h-64", hxWS "connect:/schat/ws"] $ do
-            chatInput Nothing
-            chatDisplay
-  where
-    title = p_ [class_ "mb-2 pb-1 bg-purple-300 text-xl"] "Simple WebSocket Chat"
-    chatDisplay = do
-      div_ [id_ "chatroom", class_ "flex flex-row space-x-2 mx-2 my-2 h-full"] $ do
-        roomChat
-        roomMembers
-      where
-        roomChat = do
-          div_ [id_ "chatroom-chat", class_ "flex-auto w-3/4 h-full"] $ do
-            div_
-              [ id_ "chatroom-content",
-                class_ "overflow-auto border-2 border-purple-200 h-full max-h-full"
-              ]
-              ""
-        roomMembers = do
-          div_
-            [ id_ "chatroom-members",
-              class_ "overflow-auto border-2 border-purple-200 flex-auto w-1/4 h-full max-h-full"
-            ]
-            ""
-
-chatInput :: Maybe Text -> Html ()
-chatInput loginM = do
-  let inputFieldName = if isJust loginM then "chatInputMessage" else "chatInputName"
-  form_ [hxWS "send:submit", id_ "chatroom-input", class_ "mx-2 bg-purple-200 rounded-lg"] $ do
-    span_ $ do
-      maybe (span_ [] "") (\login -> span_ [class_ "pl-1 pr-2"] $ toHtml login) loginM
-      input_
-        [ type_ "text",
-          class_ "text-sm rounded-lg bg-purple-50 border border-purple-300 focus:border-purple-400",
-          name_ inputFieldName,
-          id_ "chatroom-input-field",
-          placeholder_ "Type a message"
-        ]
-    script_ "htmx.find('#chatroom-input-field').focus()"
+      div_ [class_ "container mx-auto", hxWS "connect:/schat/ws"] $
+        div_ [id_ "schat"] ""
