@@ -44,7 +44,14 @@ sChatServer sChatS = wsChatHandler sChatS :<|> pure sChatHTMLHandler
 xStaticFiles :: [XStatic.XStaticFile]
 xStaticFiles = [XStatic.htmx, XStatic.tailwind, XStatic.hyperscript]
 
-data Event = EMessage Message | EMembersRefresh [Text]
+data EMNotice
+  = EMEnter UTCTime Text
+  | EMExit UTCTime Text
+
+data Event
+  = EMessage Message
+  | EMembersRefresh [Text]
+  | EMemberNotice EMNotice
 
 data Message = Message
   { date :: UTCTime,
@@ -104,8 +111,10 @@ wsChatHandler state conn = do
         putStrLn [i|Terminating connection due to #{show e}|]
         closeConnection
   where
-    handleConnection (Client login _conn myInputQ) = do
+    handleConnection (Client myLogin _conn myInputQ) = do
       updateChatMemberOnClients
+      date <- getCurrentTime
+      dispatchMemberNotice (EMEnter date myLogin)
       concurrently_ handleR handleS
       where
         handleR = do
@@ -113,22 +122,23 @@ wsChatHandler state conn = do
           case hE of
             Right _ -> pure ()
             Left e -> do
-              putStrLn [i|Terminating connection for #{login} due to #{show e}|]
-              atomically $ removeClient login state
+              putStrLn [i|Terminating connection for #{myLogin} due to #{show e}|]
+              atomically $ removeClient myLogin state
               updateChatMemberOnClients
+              date <- getCurrentTime
+              dispatchMemberNotice (EMExit date myLogin)
               closeConnection
           where
             handleR' = do
               wsD <- WS.receiveDataMessage conn
-              WS.sendTextData conn $ renderInputChat login
+              WS.sendTextData conn $ renderInputChat myLogin
               case extractMessage wsD "chatInputMessage" of
                 Just inputMsg -> do
                   now <- getCurrentTime
-                  let msg = Message now login inputMsg
                   atomically $ do
                     cls <- readTVar state.clients
                     forM_ cls $ \c -> do
-                      writeTBQueue c.inputQ $ EMessage msg
+                      writeTBQueue c.inputQ $ EMessage (Message now myLogin inputMsg)
                 Nothing -> pure ()
         handleS = forever handleS'
           where
@@ -137,26 +147,40 @@ wsChatHandler state conn = do
               hE <- tryAny $ WS.sendTextData conn $ renderBS $ case event of
                 EMessage msg -> renderMessage msg
                 EMembersRefresh logins -> renderMembersRefresh logins
+                EMemberNotice e -> renderMemberNotice e
               case hE of
                 Right _ -> pure ()
-                Left e -> putStrLn [i|"Unable to send a payload to client #{login} due to #{show e}"|]
+                Left e -> putStrLn [i|"Unable to send a payload to client #{myLogin} due to #{show e}"|]
             renderMessage :: Message -> Html ()
             renderMessage msg = do
               div_ [id_ "chatroom-content", hxSwapOOB "afterbegin"] $ do
                 div_ [id_ "chatroom-message"] $ do
-                  span_ [id_ "chatroom-message-date", class_ "pr-2"] . toHtml $ formatTime defaultTimeLocale "%T" (msg.date)
+                  span_ [id_ "chatroom-message-date", class_ "pr-2"] . toHtml $ formatDate (msg.date)
                   span_ [id_ "chatroom-message-login", class_ "pr-2"] . toHtml $ unpack (msg.mLogin)
                   span_ [id_ "chatroom-message-content"] . toHtml $ unpack (msg.content)
             renderMembersRefresh :: [Text] -> Html ()
             renderMembersRefresh logins = do
               div_ [id_ "chatroom-members", hxSwapOOB "innerHTML"] $ do
                 mapM_ (\mlogin -> div_ [] $ toHtml mlogin) logins
+            renderMemberNotice :: EMNotice -> Html ()
+            renderMemberNotice emn = do
+              div_ [id_ "chatroom-notices", hxSwapOOB "afterbegin"] $ do
+                case emn of
+                  EMEnter date uLogin -> div_ [] $ [i|#{formatDate date} - #{uLogin} entered the channel|]
+                  EMExit date uLogin -> div_ [] $ [i|#{formatDate date} - #{uLogin} exited the channel|]
+
+        dispatchMemberNotice :: EMNotice -> IO ()
+        dispatchMemberNotice n = atomically $ do
+          cls <- readTVar state.clients
+          forM_ cls $ \c -> do
+            writeTBQueue c.inputQ $ EMemberNotice n
 
         updateChatMemberOnClients = atomically $ do
           cls <- readTVar state.clients
-          let logins = map cLogin cls
           forM_ cls $ \c -> do
-            writeTBQueue c.inputQ $ EMembersRefresh logins
+            writeTBQueue c.inputQ $ EMembersRefresh (map cLogin cls)
+
+    formatDate = formatTime defaultTimeLocale "%T"
 
     handleWaitForLogin = do
       login <- waitForLogin
@@ -192,15 +216,16 @@ wsChatHandler state conn = do
 
     renderSChat :: Html ()
     renderSChat = do
-      div_ [id_ "schat", class_ "h-96"] $ do
+      div_ [id_ "schat", class_ "h-auto"] $ do
         div_ [class_ "bg-purple-100 border-4 border-purple-300 w-full h-full"] $ do
           title
           chatInput Nothing
           chatDisplay
+          chatNotices
       where
         title = p_ [class_ "mb-2 pb-1 bg-purple-300 text-xl"] "Simple WebSocket Chat"
         chatDisplay = do
-          div_ [id_ "chatroom", class_ "flex flex-row space-x-2 mx-2 my-2 h-64"] $ do
+          div_ [id_ "chatroom", class_ "flex flex-row space-x-2 mx-2 my-2 h-96"] $ do
             roomChat
             roomMembers
           where
@@ -232,6 +257,14 @@ wsChatHandler state conn = do
               placeholder_ "Type a message"
             ]
         script_ "htmx.find('#chatroom-input-field').focus()"
+
+    chatNotices :: Html ()
+    chatNotices = do
+      div_
+        [ id_ "chatroom-notices",
+          class_ "overflow-auto mb-2 mx-2 border-2 border-purple-200 h-16 max-h-full"
+        ]
+        $ ""
 
 sChatHTMLHandler :: Html ()
 sChatHTMLHandler = do
