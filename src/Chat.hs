@@ -191,13 +191,13 @@ sChatHTMLHandler = do
         div_ [class_ "bg-purple-100 border-4 border-purple-300 w-full h-64"] $ do
           p_ [class_ "mb-2 bg-purple-200 text-xl"] "Simple WebSocket Chat"
           div_ [hxWS "connect:/schat/ws", hS "on htmx:oobAfterSwap call #chatInput.reset()"] $ do
-            div_ [class_ "flex space-x-2 mx-2 my-2"] $ do
-              div_ [id_ "chatroom-chat", class_ "border-2 border-purple-200 w-2/3"] $ do
+            div_ [id_ "chatroom", class_ "flex flex-row space-x-2 mx-2 my-2"] $ do
+              div_ [id_ "chatroom-chat", class_ "flex-auto w-2/3 h-32"] $ do
                 form_ [id_ "chatroom-input", class_ "bg-purple-200", hxWS "send:submit"] $ do
                   input_
                     [ type_ "text",
                       name_ "chatNameMessage",
                       placeholder_ "Type your name"
                     ]
-                div_ [id_ "chatroom-content"] ""
-              div_ [id_ "chatroom-members", class_ "border-2 border-purple-200 w-1/3"] ""
+                div_ [id_ "chatroom-content", class_ "overflow-auto border-2 border-purple-200 h-full max-h-full"] ""
+              div_ [id_ "chatroom-members", class_ "border-2 border-purple-200 flex-auto w-1/3 h-full max-h-full"] ""
