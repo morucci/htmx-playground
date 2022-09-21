@@ -205,19 +205,28 @@ sChatHTMLHandler = do
         roomMembers
       where
         roomChat = do
-          div_ [id_ "chatroom-chat", class_ "flex-auto w-2/3 h-full"] $ do
-            div_ [id_ "chatroom-content", class_ "overflow-auto border-2 border-purple-200 h-full max-h-full"] ""
+          div_ [id_ "chatroom-chat", class_ "flex-auto w-3/4 h-full"] $ do
+            div_
+              [ id_ "chatroom-content",
+                class_ "overflow-auto border-2 border-purple-200 h-full max-h-full"
+              ]
+              ""
         roomMembers = do
-          div_ [id_ "chatroom-members", class_ "border-2 border-purple-200 flex-auto w-1/3 h-full max-h-full"] ""
+          div_
+            [ id_ "chatroom-members",
+              class_ "overflow-auto border-2 border-purple-200 flex-auto w-1/4 h-full max-h-full"
+            ]
+            ""
 
 chatInput :: Maybe Text -> Html ()
 chatInput loginM = do
   let inputFieldName = if isJust loginM then "chatInputMessage" else "chatInputName"
-  form_ [hxWS "send:submit", id_ "chatroom-input", class_ "mx-2 bg-purple-200"] $ do
+  form_ [hxWS "send:submit", id_ "chatroom-input", class_ "mx-2 bg-purple-200 rounded-lg"] $ do
     span_ $ do
       maybe (span_ [] "") (\login -> span_ [class_ "pl-1 pr-2"] $ toHtml login) loginM
       input_
         [ type_ "text",
+          class_ "text-sm rounded-lg bg-purple-50 border border-purple-300 focus:border-purple-400",
           name_ inputFieldName,
           id_ "chatroom-input-field",
           placeholder_ "Type a message"
