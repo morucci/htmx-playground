@@ -101,6 +101,7 @@ wsChatHandler state conn = do
         closeConnection
   where
     handleConnection (Client login _conn myInputQ) = do
+      updateChatMemberOnClients
       concurrently_ handleR handleS
       where
         handleR = do
@@ -110,6 +111,7 @@ wsChatHandler state conn = do
             Left e -> do
               putStrLn [i|Terminating connection for #{login} due to #{show e}|]
               atomically $ removeClient login state
+              updateChatMemberOnClients
               closeConnection
           where
             handleR' = do
@@ -136,6 +138,16 @@ wsChatHandler state conn = do
               case hE of
                 Right _ -> pure ()
                 Left e -> putStrLn [i|"Unable to send a payload to client #{login} due to #{show e}"|]
+        updateChatMemberOnClients = do
+          putStrLn "Update clients members"
+          cls <- atomically $ readTVar state.clients
+          forM_ cls $ \c -> do
+            hE <- tryAny $ WS.sendTextData c.conn $ renderBS $ do
+              div_ [id_ "chatroom-members", hxSwapOOB "innerHTML"] $ do
+                mapM_ (\Client {cLogin} -> div_ [] $ toHtml cLogin) cls
+            case hE of
+              Right _ -> pure ()
+              Left e -> putStrLn [i|"Unable to send a payload to client #{login} due to #{show e}"|]
 
     handleNewConnection = do
       login <- waitForLogin
