@@ -44,6 +44,8 @@ sChatServer sChatS = wsChatHandler sChatS :<|> pure sChatHTMLHandler
 xStaticFiles :: [XStatic.XStaticFile]
 xStaticFiles = [XStatic.htmx, XStatic.tailwind, XStatic.hyperscript]
 
+data Event = EMessage Message | EMembersRefresh [Text]
+
 data Message = Message
   { date :: UTCTime,
     mLogin :: Text,
@@ -54,7 +56,7 @@ data Message = Message
 data Client = Client
   { cLogin :: Text,
     conn :: WS.Connection,
-    inputQ :: TBQueue Message
+    inputQ :: TBQueue Event
   }
 
 data SChatS = SChatS
@@ -125,30 +127,35 @@ wsChatHandler state conn = do
                   atomically $ do
                     cls <- readTVar state.clients
                     forM_ cls $ \c -> do
-                      writeTBQueue c.inputQ msg
+                      writeTBQueue c.inputQ $ EMessage msg
                 Nothing -> pure ()
         handleS = forever handleS'
           where
             handleS' = do
-              msg <- atomically $ readTBQueue myInputQ
-              hE <- tryAny $ WS.sendTextData conn $ renderBS $ do
-                div_ [id_ "chatroom-content", hxSwapOOB "afterbegin"] $ do
-                  div_ [id_ "chatroom-message"] $ do
-                    span_ [id_ "chatroom-message-date", class_ "pr-2"] . toHtml $ formatTime defaultTimeLocale "%T" (msg.date)
-                    span_ [id_ "chatroom-message-login", class_ "pr-2"] . toHtml $ unpack (msg.mLogin)
-                    span_ [id_ "chatroom-message-content"] . toHtml $ unpack (msg.content)
+              event <- atomically $ readTBQueue myInputQ
+              hE <- tryAny $ WS.sendTextData conn $ renderBS $ case event of
+                EMessage msg -> renderMessage msg
+                EMembersRefresh logins -> renderMembersRefresh logins
               case hE of
                 Right _ -> pure ()
                 Left e -> putStrLn [i|"Unable to send a payload to client #{login} due to #{show e}"|]
-        updateChatMemberOnClients = do
-          cls <- atomically $ readTVar state.clients
-          forM_ cls $ \c -> do
-            hE <- tryAny $ WS.sendTextData c.conn $ renderBS $ do
+            renderMessage :: Message -> Html ()
+            renderMessage msg = do
+              div_ [id_ "chatroom-content", hxSwapOOB "afterbegin"] $ do
+                div_ [id_ "chatroom-message"] $ do
+                  span_ [id_ "chatroom-message-date", class_ "pr-2"] . toHtml $ formatTime defaultTimeLocale "%T" (msg.date)
+                  span_ [id_ "chatroom-message-login", class_ "pr-2"] . toHtml $ unpack (msg.mLogin)
+                  span_ [id_ "chatroom-message-content"] . toHtml $ unpack (msg.content)
+            renderMembersRefresh :: [Text] -> Html ()
+            renderMembersRefresh logins = do
               div_ [id_ "chatroom-members", hxSwapOOB "innerHTML"] $ do
-                mapM_ (\Client {cLogin} -> div_ [] $ toHtml cLogin) cls
-            case hE of
-              Right _ -> pure ()
-              Left e -> putStrLn [i|"Unable to send a payload to client #{login} due to #{show e}"|]
+                mapM_ (\mlogin -> div_ [] $ toHtml mlogin) logins
+
+        updateChatMemberOnClients = atomically $ do
+          cls <- readTVar state.clients
+          let logins = map cLogin cls
+          forM_ cls $ \c -> do
+            writeTBQueue c.inputQ $ EMembersRefresh logins
 
     handleNewConnection = do
       login <- waitForLogin
